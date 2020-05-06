@@ -14,7 +14,7 @@ from training import misc
 #----------------------------------------------------------------------------
 
 class Projector:
-    def __init__(self,num_steps=5000,verbose=False):
+    def __init__(self,num_steps=5000,verbose=False,info_freq=10):
         self.num_steps                  = num_steps
         self.dlatent_avg_samples        = 10000
         self.initial_learning_rate      = 0.1
@@ -48,9 +48,8 @@ class Projector:
         self._cur_step              = None
         
         self._D                     = None
-        self._D_output_fake         = None
-        self._D_output_real         = None
         self._quadratic_dist        = None
+        self._info_freq             = info_freq
     
     def _info(self, *args):
         if self.verbose:
@@ -163,6 +162,11 @@ class Projector:
 
     def start(self, target_images):
         assert self._Gs is not None
+        
+        # Initialize discriminator evaluation
+        if self._D != None:  
+            D_real_value = self._D.run(target_images,[[]],is_training=False)
+            self._info('Discriminator target output: %-12g' % (D_real_value))
 
         # Prepare target images.
         self._info('Preparing target images...')
@@ -180,12 +184,6 @@ class Projector:
         tflib.run(self._noise_init_op)
         self._opt.reset_optimizer_state()
         self._cur_step = 0
-
-        # Initialize discriminator evaluation
-        if self._D != None:           
-            self._D_output_fake = self._D.get_output_for(self._images_expr,[[]],is_training=False)
-            self._D_output_real = self._D.run(target_images,[[]],is_training=False)
-            self._info('Discriminator target output: %-12g' % (self._D_output_real))
             
     def step(self):
         assert self._cur_step is not None
@@ -206,23 +204,18 @@ class Projector:
         feed_dict = {self._noise_in: noise_strength, self._lrate_in: learning_rate}
         _, dist_value, loss_value = tflib.run([self._opt_step, self._dist, self._loss], feed_dict)
         tflib.run(self._noise_normalize_op)
-        
-        #Discriminator evaluation
-        if self._D != None:
-            D_fake_value=tflib.run([self._D_output_fake], feed_dict)
-        
-        #Quadratic evaluation
-        if self._quadratic_dist != None:
-            quadratic_dist_value=tflib.run([self._quadratic_dist],feed_dict)
 
         # Print status.
         self._cur_step += 1
-        if self._cur_step == self.num_steps or self._cur_step % 10 == 0:
-            self._info('%-8d, Perceptual distance: %-12g Loss: %-12g' % (self._cur_step, dist_value, loss_value))
+        if self._cur_step == self.num_steps or self._cur_step % self._info_freq == 0:
+            info='%-8d, Perceptual distance: %-12g Loss: %-12g' % (self._cur_step, dist_value, loss_value)
             if self._D != None:
-                self._info('Discriminator output: %-12g' % (D_fake_value))
+                D_fake_value=tflib.run([self._D.get_output_for(self._images_expr,[[]],is_training=False)], feed_dict)
+                info+=' Discriminator output: %-12g' % (D_fake_value[0][0][0])
             if self._quadratic_dist != None:
-                self._info('Euclidean distance: %-12g' % (quadratic_dist_value))
+                quadratic_dist_value=tflib.run([self._quadratic_dist],feed_dict)
+                info+=' Euclidean distance: %-12g' % (quadratic_dist_value[0])
+            self._info(info)
         if self._cur_step == self.num_steps:
             self._info('Done.')
 
