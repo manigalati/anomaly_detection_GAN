@@ -4,6 +4,7 @@
 # To view a copy of this license, visit
 # https://nvlabs.github.io/stylegan2/license.html
 
+import sys
 import numpy as np
 import tensorflow as tf
 import dnnlib
@@ -14,7 +15,7 @@ from training import misc
 #----------------------------------------------------------------------------
 
 class Projector:
-    def __init__(self,num_steps=5000,verbose=False,info_freq=10):
+    def __init__(self,num_steps=5000,verbose=False,info_freq=10,info_output=sys.stdout):
         self.num_steps                  = num_steps
         self.dlatent_avg_samples        = 10000
         self.initial_learning_rate      = 0.1
@@ -50,10 +51,11 @@ class Projector:
         self._D                     = None
         self._quadratic_dist        = None
         self._info_freq             = info_freq
+        self._info_output           = info_output
     
     def _info(self, *args):
         if self.verbose:
-            print('Projector:', *args)
+            print('Projector:', *args, file=self._info_output)
 
     def set_network(self, Gs, minibatch_size=1, D=None, perfect=False, quadratic_evaluation=False):
         assert minibatch_size == 1
