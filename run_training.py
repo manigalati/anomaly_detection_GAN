@@ -141,7 +141,7 @@ def _parse_comma_sep(s):
 _examples = '''examples:
 
   # Train StyleGAN2 using the FFHQ dataset
-  python %(prog)s --num-gpus=8 --data-dir=~/datasets --config=config-f --dataset=ffhq --mirror-augment=true
+  python %(prog)s --num-gpus=8 --data-dir=datasets --config=config-f --dataset=ffhq --mirror-augment=true
 
 valid configs:
 

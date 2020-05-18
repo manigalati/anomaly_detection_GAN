@@ -21,15 +21,17 @@ from training import misc
 
 #----------------------------------------------------------------------------
 
-def E_logistic_r1(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     _ = opt, training_set
-    dlatents_expr = E.get_output_for(reals, labels, is_training=True)   
+    dlatents_expr = E.get_output_for(reals, is_training=True)   
     images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
     
+    reals = (reals + 1) * (255 / 2)
     proc_images_expr = (images_expr + 1) * (255 / 2)
     sh = proc_images_expr.shape.as_list()
     if sh[2] > 256:
         factor = sh[2] // 256
+        reals = tf.reduce_mean(tf.reshape(reals, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
         proc_images_expr = tf.reduce_mean(tf.reshape(proc_images_expr, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
 
     lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
@@ -448,13 +450,14 @@ def training_loop(
                 labels_write = tf.concat([labels_write, labels_var[minibatch_gpu_in:]], axis=0)
                 data_fetch_ops += [tf.assign(reals_var, reals_write)]
                 data_fetch_ops += [tf.assign(labels_var, labels_write)]
-
+                reals_read = reals_var[:minibatch_gpu_in]
+                labels_read = labels_var[:minibatch_gpu_in]
             # Evaluate loss functions.
             lod_assign_ops = []
             if 'lod' in E_gpu.vars: lod_assign_ops += [tf.assign(E_gpu.vars['lod'], lod_in)]
             with tf.control_dependencies(lod_assign_ops):
                 with tf.name_scope('E_loss'):
-                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, **E_loss_args)
+                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **E_loss_args)
 
             # Register gradients.
             if not lazy_regularization:
@@ -514,7 +517,8 @@ def training_loop(
 
             # Fast path without gradient accumulation.
             if len(rounds) == 1:
-                tflib.run([E_train_op, data_fetch_op], feed_dict)
+                _,_,loss_value=tflib.run([E_train_op, data_fetch_op, E_loss], feed_dict)
+                print(loss_value)
                 if run_E_reg:
                     tflib.run(E_reg_op, feed_dict)
 
@@ -552,12 +556,12 @@ def training_loop(
 
             # Save snapshots.
             if image_snapshot_ticks is not None and (cur_tick % image_snapshot_ticks == 0 or done):
-                grid_fakes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
-                misc.save_image_grid(grid_fakes, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
+                grid_projs = Gs.components.synthesis.run([E.run(grid_fakes)], grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
+                misc.save_image_grid(grid_projs, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
             if network_snapshot_ticks is not None and (cur_tick % network_snapshot_ticks == 0 or done):
                 pkl = dnnlib.make_run_dir_path('network-snapshot-%06d.pkl' % (cur_nimg // 1000))
-                misc.save_pkl((E), pkl)
-                metrics.run(pkl, run_dir=dnnlib.make_run_dir_path(), data_dir=dnnlib.convert_path(data_dir), num_gpus=num_gpus, tf_config=tf_config)
+                misc.save_pkl([E], pkl)
+                #metrics.run(pkl, run_dir=dnnlib.make_run_dir_path(), data_dir=dnnlib.convert_path(data_dir), num_gpus=num_gpus, tf_config=tf_config)
 
             # Update summaries and RunContext.
             metrics.update_autosummaries()
