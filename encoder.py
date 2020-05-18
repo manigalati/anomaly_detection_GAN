@@ -21,7 +21,7 @@ from training import misc
 
 #----------------------------------------------------------------------------
 
-def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+def E_loss_reals(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     _ = opt, training_set
     dlatents_expr = E.get_output_for(reals, is_training=True)   
     images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
@@ -40,18 +40,29 @@ def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     
     # Noise regularization graph.
     reg = 0.0
-    """for v in noise_vars:
-        sz = v.shape[2]
-        while True:
-            reg += tf.reduce_mean(v * tf.roll(v, shift=1, axis=3))**2 + tf.reduce_mean(v * tf.roll(v, shift=1, axis=2))**2
-            if sz <= 8:
-                break # Small enough already
-            v = tf.reshape(v, [1, 1, sz//2, 2, sz//2, 2]) # Downscale
-            v = tf.reduce_mean(v, axis=[3, 5])
-            sz = sz // 2"""
             
     return loss, reg
 
+#----------------------------------------------------------------------------
+
+def E_loss_fakes(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+    _ = opt, training_set
+    
+    #Use G to generate some dlatents + images
+    
+    #turn back images
+    
+    latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
+    labels = training_set.get_random_labels_tf(minibatch_size) 
+    
+    fakes,dlatents_targets=G.get_output_for(latents,labels,return_dlatents=True)
+    dlatents_expr = E.get_output_for(fakes, is_training=True)  
+    
+    loss = tf.norm(dlatents_expr-dlatents_targets)
+
+    reg = 0.0
+            
+    return loss, reg
 
 #----------------------------------------------------------------------------
 # Get/create weight tensor for a convolution or fully-connected layer.
@@ -366,8 +377,8 @@ def training_loop(
     total_kimg              = 25000,    # Total length of the training, measured in thousands of real images.
     mirror_augment          = False,    # Enable mirror augment?
     drange_net              = [-1,1],   # Dynamic range used when feeding image data to the networks.
-    image_snapshot_ticks    = 50,       # How often to save image snapshots? None = only save 'reals.png' and 'fakes-init.png'.
-    network_snapshot_ticks  = 50,       # How often to save network snapshots? None = only save 'networks-final.pkl'.
+    image_snapshot_ticks    = 10,       # How often to save image snapshots? None = only save 'reals.png' and 'fakes-init.png'.
+    network_snapshot_ticks  = 10,       # How often to save network snapshots? None = only save 'networks-final.pkl'.
     save_tf_graph           = False,    # Include full TensorFlow computation graph in the tfevents file?
     save_weight_histograms  = False,    # Include weight histograms in the tfevents file?
     network_pkl             = None,
@@ -518,7 +529,6 @@ def training_loop(
             # Fast path without gradient accumulation.
             if len(rounds) == 1:
                 _,_,loss_value=tflib.run([E_train_op, data_fetch_op, E_loss], feed_dict)
-                print(loss_value)
                 if run_E_reg:
                     tflib.run(E_reg_op, feed_dict)
 
@@ -527,14 +537,18 @@ def training_loop(
                 for _round in rounds:
                     tflib.run(data_fetch_op, feed_dict)
                     tflib.run(E_train_op, feed_dict)
+                    loss_value=tflib.run(E_loss, feed_dict)
                 if run_E_reg:
                     for _round in rounds:
                         tflib.run(E_reg_op, feed_dict)
+            print(loss_value)
 
         # Perform maintenance tasks once per tick.
         done = (cur_nimg >= total_kimg * 1000)
+        print(cur_tick)
+        cur_tick += 1
         if cur_tick < 0 or cur_nimg >= tick_start_nimg + sched.tick_kimg * 1000 or done:
-            cur_tick += 1
+            #cur_tick += 1
             tick_kimg = (cur_nimg - tick_start_nimg) / 1000.0
             tick_start_nimg = cur_nimg
             tick_time = dnnlib.RunContext.get().get_time_since_last_update()
@@ -553,21 +567,26 @@ def training_loop(
                 autosummary('Resources/peak_gpu_mem_gb', peak_gpu_mem_op.eval() / 2**30)))
             autosummary('Timing/total_hours', total_time / (60.0 * 60.0))
             autosummary('Timing/total_days', total_time / (24.0 * 60.0 * 60.0))
-
-            # Save snapshots.
-            if image_snapshot_ticks is not None and (cur_tick % image_snapshot_ticks == 0 or done):
-                grid_projs = Gs.components.synthesis.run([E.run(grid_fakes)], grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
-                misc.save_image_grid(grid_projs, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
-            if network_snapshot_ticks is not None and (cur_tick % network_snapshot_ticks == 0 or done):
-                pkl = dnnlib.make_run_dir_path('network-snapshot-%06d.pkl' % (cur_nimg // 1000))
-                misc.save_pkl([E], pkl)
-                #metrics.run(pkl, run_dir=dnnlib.make_run_dir_path(), data_dir=dnnlib.convert_path(data_dir), num_gpus=num_gpus, tf_config=tf_config)
-
+            
             # Update summaries and RunContext.
             metrics.update_autosummaries()
             tflib.autosummary.save_summaries(summary_log, cur_nimg)
             dnnlib.RunContext.get().update('%.2f' % sched.lod, cur_epoch=cur_nimg // 1000, max_epoch=total_kimg)
             maintenance_time = dnnlib.RunContext.get().get_last_update_interval() - tick_time
+
+        #START INDENT
+
+        # Save snapshots.
+        if image_snapshot_ticks is not None and (cur_tick % image_snapshot_ticks == 0 or done):
+            grid_projs_dlatents=E.run(grid_fakes,is_validation=True, minibatch_size=sched.minibatch_gpu)
+            grid_projs = Gs.components.synthesis.run(grid_projs_dlatents, is_validation=True, minibatch_size=sched.minibatch_gpu)
+            misc.save_image_grid(grid_projs, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
+        if network_snapshot_ticks is not None and (cur_tick % network_snapshot_ticks == 0 or done):
+            pkl = dnnlib.make_run_dir_path('network-snapshot-%06d.pkl' % (cur_nimg // 1000))
+            misc.save_pkl([E], pkl)
+            #metrics.run(pkl, run_dir=dnnlib.make_run_dir_path(), data_dir=dnnlib.convert_path(data_dir), num_gpus=num_gpus, tf_config=tf_config)
+
+        #STOP INDENT
 
     # Save final snapshot.
     misc.save_pkl((E), dnnlib.make_run_dir_path('network-final.pkl'))
