@@ -21,7 +21,7 @@ from training import misc
 
 #----------------------------------------------------------------------------
 
-def E_logistic_r1(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     _ = opt, training_set
     dlatents_expr = E.get_output_for(reals, labels, is_training=True)   
     images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
