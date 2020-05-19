@@ -21,6 +21,37 @@ from training import misc
 
 #----------------------------------------------------------------------------
 
+def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+    _ = opt, training_set
+    dlatents_expr = E.get_output_for(reals, is_training=True)   
+    images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
+    
+    reals = (reals + 1) * (255 / 2)
+    proc_images_expr = (images_expr + 1) * (255 / 2)
+    sh = proc_images_expr.shape.as_list()
+    if sh[2] > 256:
+        factor = sh[2] // 256
+        reals = tf.reduce_mean(tf.reshape(reals, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
+        proc_images_expr = tf.reduce_mean(tf.reshape(proc_images_expr, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
+
+    lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
+    dist = lpips.get_output_for(proc_images_expr, reals)
+    loss = tf.reduce_sum(dist)
+    
+    latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
+    labels = training_set.get_random_labels_tf(minibatch_size) 
+    
+    fakes,dlatents_targets=G.get_output_for(latents,labels,return_dlatents=True)
+    dlatents_expr = E.get_output_for(fakes, is_training=True)  
+    
+    loss += tf.norm(dlatents_expr-dlatents_targets)
+
+    reg = 0.0
+            
+    return loss, reg
+
+#----------------------------------------------------------------------------
+
 def E_loss_reals(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     _ = opt, training_set
     dlatents_expr = E.get_output_for(reals, is_training=True)   
@@ -579,8 +610,14 @@ def training_loop(
         # Save snapshots.
         if image_snapshot_ticks is not None and (cur_tick % image_snapshot_ticks == 0 or done):
             grid_projs_dlatents=E.run(grid_fakes,is_validation=True, minibatch_size=sched.minibatch_gpu)
-            grid_projs = Gs.components.synthesis.run(grid_projs_dlatents, is_validation=True, minibatch_size=sched.minibatch_gpu)
-            misc.save_image_grid(grid_projs, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
+            grid_projs_fakes = Gs.components.synthesis.run(grid_projs_dlatents, is_validation=True, minibatch_size=sched.minibatch_gpu)
+            
+            grid_projs_dlatents=E.run(grid_reals,is_validation=True, minibatch_size=sched.minibatch_gpu)
+            grid_projs_reals = Gs.components.synthesis.run(grid_projs_dlatents, is_validation=True, minibatch_size=sched.minibatch_gpu)
+            
+            misc.save_image_grid(grid_projs_fakes, dnnlib.make_run_dir_path('projs_fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
+            misc.save_image_grid(grid_projs_reals, dnnlib.make_run_dir_path('projs_reals%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
+        
         if network_snapshot_ticks is not None and (cur_tick % network_snapshot_ticks == 0 or done):
             pkl = dnnlib.make_run_dir_path('network-snapshot-%06d.pkl' % (cur_nimg // 1000))
             misc.save_pkl([E], pkl)

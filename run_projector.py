@@ -10,7 +10,7 @@ import dnnlib
 import dnnlib.tflib as tflib
 import re
 import sys
-import cv2, PIL
+import cv2
 
 import projector
 import pretrained_networks
