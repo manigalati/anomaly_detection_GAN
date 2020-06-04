@@ -12,6 +12,10 @@ import dnnlib.tflib as tflib
 
 from training import misc
 
+from dnnlib import EasyDict
+
+from metrics.anomaly_PPL import anomaly_PPL
+
 #----------------------------------------------------------------------------
 
 class Projector:
@@ -149,6 +153,17 @@ class Projector:
         self._opt.register_gradients(self._loss, [self._dlatents_var] + self._noise_vars)
         self._opt_step = self._opt.apply_updates()
 
+    
+    def eval_APPL(self, dlatent):
+      anomaly_PPL_defaults = EasyDict([(args.name, args) for args in [
+        EasyDict(name='appl', dlatent=dlatent, num_samples=100, epsilon=1e-4, crop=True, minibatch_per_gpu=4, Gs_overrides=dict(dtype='float32', mapping_dtype='float32'))
+      ]])
+
+      appl=anomaly_PPL(**anomaly_PPL_defaults['appl'])
+      appl._evaluate(self._Gs, Gs_kwargs=dict(is_validation=True), num_gpus=1)
+
+      return appl._results[0]['value']
+    
     def run(self, target_images):
         # Run to completion.
         self.start(target_images)
