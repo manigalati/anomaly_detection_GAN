@@ -39,7 +39,9 @@ def project_image(proj, targets, png_prefix, num_snapshots):
         write_video_frame(proj, video_out)
         if proj.get_cur_step() in snapshot_steps:
             misc.save_image_grid(proj.get_images(), png_prefix + 'step%04d.png' % proj.get_cur_step(), drange=[-1,1])
-            
+
+    proj._info('APPL: '+str(proj.eval_APPL(proj.get_dlatents())))
+    
     video_out.release()
     print('\r%-30s\r' % '', end='', flush=True)
 
