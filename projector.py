@@ -57,6 +57,9 @@ class Projector:
         self._info_freq             = info_freq
         self._info_output           = info_output
     
+    def set_info_output(self,info_output):
+        self._info_output=info_output
+    
     def _info(self, *args):
         if self.verbose:
             print('Projector:', *args, file=self._info_output)
