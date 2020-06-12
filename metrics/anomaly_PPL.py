@@ -34,13 +34,14 @@ def slerp(a, b, t):
 class anomaly_PPL(metric_base.MetricBase):
     def __init__(self, dlatent, num_samples, epsilon, crop, minibatch_per_gpu, Gs_overrides, **kwargs):
         super().__init__(**kwargs)
+        self.dlatent = dlatent
         self.num_samples = num_samples
         self.epsilon = epsilon
         self.crop = crop
         self.minibatch_per_gpu = minibatch_per_gpu
         self.Gs_overrides = Gs_overrides
 
-    def _evaluate(self, dlatent, Gs, Gs_kwargs, num_gpus):
+    def _evaluate(self, Gs, Gs_kwargs, num_gpus):
         Gs_kwargs = dict(Gs_kwargs)
         Gs_kwargs.update(self.Gs_overrides)
         minibatch_size = num_gpus * self.minibatch_per_gpu
@@ -53,13 +54,14 @@ class anomaly_PPL(metric_base.MetricBase):
                 noise_vars = [var for name, var in Gs_clone.components.synthesis.vars.items() if name.startswith('noise')]
 
                 # Generate latents and interpolation t-values around the target.
-                samples = tf.random_normal([self.minibatch_per_gpu] + Gs_clone.components.synthesis.input_shape[1:],mean=dlatent,stddev=0.1)
+                samples = tf.random_normal([self.minibatch_per_gpu] + Gs_clone.components.synthesis.input_shape[1:],mean=self.dlatent,stddev=0.1)
                 samples = tf.cast(samples, tf.float32)
 
                 lerp_t = tf.random_uniform([self.minibatch_per_gpu], 0.0, 0.0)
-                comparison = tflib.lerp(dlatent, samples, lerp_t[:, np.newaxis, np.newaxis] + self.epsilon)
-                dlat_e01 = tf.reshape(tf.stack([dlatent, comparison], axis=1), [self.minibatch_per_gpu*2] + Gs_clone.components.synthesis.input_shape[1:])
-
+                
+                dlats=tf.tile(self.dlatent, [4, 1, 1])
+                comparison = tflib.lerp(dlats, samples, lerp_t[:, np.newaxis, np.newaxis] + self.epsilon)
+                dlat_e01 = tf.reshape(tf.stack([dlats, comparison], axis=1), [self.minibatch_per_gpu*2] + Gs_clone.components.synthesis.input_shape[1:])
                 
                 # Synthesize images.
                 with tf.control_dependencies([var.initializer for var in noise_vars]): # use same noise inputs for the entire minibatch
