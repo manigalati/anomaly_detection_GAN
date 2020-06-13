@@ -19,6 +19,58 @@ from metrics import metric_base
 from training import dataset
 from training import misc
 
+# Non-saturating logistic loss with path length regularizer from the paper
+# "Analyzing and Improving the Image Quality of StyleGAN", Karras et al. 2019
+
+def E_logistic_ns_pathreg(E, G, D, opt, training_set, minibatch_size, reals, pl_minibatch_shrink=2, pl_decay=0.01, pl_weight=2.0):
+    _ = opt
+    labels = training_set.get_random_labels_tf(minibatch_size)
+    fake_dlatents_out = E.get_output_for(reals, is_training=True)   
+    fake_images_out = G.components.synthesis.get_output_for(fake_dlatents_out, randomize_noise=False)
+    fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
+    loss = tf.nn.softplus(-fake_scores_out) # -log(sigmoid(fake_scores_out))
+
+    # Path length regularization.
+    with tf.name_scope('PathReg'):
+
+        # Evaluate the regularization term using a smaller minibatch to conserve memory.
+        if pl_minibatch_shrink > 1:
+            pl_minibatch = minibatch_size // pl_minibatch_shrink
+            pl_latents = tf.random_normal([pl_minibatch] + G.input_shapes[0][1:])
+            pl_labels = training_set.get_random_labels_tf(pl_minibatch)
+            fake_images_out, fake_dlatents_out = G.get_output_for(pl_latents, pl_labels, is_training=True, return_dlatents=True)
+
+        # Compute |J*y|.
+        pl_noise = tf.random_normal(tf.shape(fake_images_out)) / np.sqrt(np.prod(G.output_shape[2:]))
+        pl_grads = tf.gradients(tf.reduce_sum(fake_images_out * pl_noise), [fake_dlatents_out])[0]
+        pl_lengths = tf.sqrt(tf.reduce_mean(tf.reduce_sum(tf.square(pl_grads), axis=2), axis=1))
+        pl_lengths = autosummary('Loss/pl_lengths', pl_lengths)
+
+        # Track exponential moving average of |J*y|.
+        with tf.control_dependencies(None):
+            pl_mean_var = tf.Variable(name='pl_mean', trainable=False, initial_value=0.0, dtype=tf.float32)
+        pl_mean = pl_mean_var + pl_decay * (tf.reduce_mean(pl_lengths) - pl_mean_var)
+        pl_update = tf.assign(pl_mean_var, pl_mean)
+
+        # Calculate (|J*y|-a)^2.
+        with tf.control_dependencies([pl_update]):
+            pl_penalty = tf.square(pl_lengths - pl_mean)
+            pl_penalty = autosummary('Loss/pl_penalty', pl_penalty)
+
+        # Apply weight.
+        #
+        # Note: The division in pl_noise decreases the weight by num_pixels, and the reduce_mean
+        # in pl_lengths decreases it by num_affine_layers. The effective weight then becomes:
+        #
+        # gamma_pl = pl_weight / num_pixels / num_affine_layers
+        # = 2 / (r^2) / (log2(r) * 2 - 2)
+        # = 1 / (r^2 * (log2(r) - 1))
+        # = ln(2) / (r^2 * (ln(r) - ln(2))
+        #
+        reg = pl_penalty * pl_weight
+
+    return loss, reg
+
 #----------------------------------------------------------------------------
 
 def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
@@ -68,6 +120,8 @@ def E_loss_reals(E, G, opt, training_set, minibatch_size, reals, labels, gamma=1
     lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
     dist = lpips.get_output_for(proc_images_expr, reals)
     loss = tf.reduce_sum(dist)
+    
+    #loss = tf.norm(images_expr-reals)
     
     # Noise regularization graph.
     reg = 0.0
@@ -499,7 +553,8 @@ def training_loop(
             if 'lod' in E_gpu.vars: lod_assign_ops += [tf.assign(E_gpu.vars['lod'], lod_in)]
             with tf.control_dependencies(lod_assign_ops):
                 with tf.name_scope('E_loss'):
-                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **E_loss_args)
+                    #E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **E_loss_args)
+                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, D=D, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, **E_loss_args)
 
             # Register gradients.
             if not lazy_regularization:
@@ -559,7 +614,7 @@ def training_loop(
 
             # Fast path without gradient accumulation.
             if len(rounds) == 1:
-                _,_,loss_value=tflib.run([E_train_op, data_fetch_op, E_loss], feed_dict)
+                tflib.run([E_train_op, data_fetch_op], feed_dict)
                 if run_E_reg:
                     tflib.run(E_reg_op, feed_dict)
 
@@ -568,15 +623,13 @@ def training_loop(
                 for _round in rounds:
                     tflib.run(data_fetch_op, feed_dict)
                     tflib.run(E_train_op, feed_dict)
-                    loss_value=tflib.run(E_loss, feed_dict)
+                    tflib.run(E_loss, feed_dict)
                 if run_E_reg:
                     for _round in rounds:
                         tflib.run(E_reg_op, feed_dict)
-            print(loss_value)
 
         # Perform maintenance tasks once per tick.
         done = (cur_nimg >= total_kimg * 1000)
-        print(cur_tick)
         cur_tick += 1
         if cur_tick < 0 or cur_nimg >= tick_start_nimg + sched.tick_kimg * 1000 or done:
             #cur_tick += 1
