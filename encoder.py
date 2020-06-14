@@ -71,41 +71,34 @@ def E_logistic_ns_pathreg(E, G, D, opt, training_set, minibatch_size, reals, pl_
         reg = pl_penalty * pl_weight
 
     return loss, reg
-"""
+
 #----------------------------------------------------------------------------
 
-def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+def E_loss(E, G, opt, training_set, minibatch_size, reals, gamma=10.0):
     _ = opt, training_set
+    
+    #REALS
+    
     dlatents_expr = E.get_output_for(reals, is_training=True)   
     images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
-    
-    reals = (reals + 1) * (255 / 2)
-    proc_images_expr = (images_expr + 1) * (255 / 2)
-    sh = proc_images_expr.shape.as_list()
-    if sh[2] > 256:
-        factor = sh[2] // 256
-        reals = tf.reduce_mean(tf.reshape(reals, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
-        proc_images_expr = tf.reduce_mean(tf.reshape(proc_images_expr, [-1, sh[1], sh[2] // factor, factor, sh[2] // factor, factor]), axis=[3,5])
 
-    lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
-    dist = lpips.get_output_for(proc_images_expr, reals)
-    loss = tf.reduce_sum(dist)
+    loss=tf.nn.l2_loss(images_expr - reals)
     
-    latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
-    labels = training_set.get_random_labels_tf(minibatch_size) 
-    
-    fakes,dlatents_targets=G.get_output_for(latents,labels,return_dlatents=True)
+    #FAKES
+
+    latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])  
+    fakes,dlatents_targets=G.get_output_for(latents,[[]],return_dlatents=True)
     dlatents_expr = E.get_output_for(fakes, is_training=True)  
     
-    loss += tf.norm(dlatents_expr-dlatents_targets)
+    loss += tf.nn.l2_loss(dlatents_expr-dlatents_targets)
 
     reg = 0.0
             
-    return loss, reg"""
+    return loss, reg
     
 #----------------------------------------------------------------------------
 
-#----------------------------------------------------------------------------
+"""#----------------------------------------------------------------------------
 
 def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
 
@@ -122,7 +115,7 @@ def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
 
     reg = 0.0
             
-    return loss, reg
+    return loss, reg"""
 
 #----------------------------------------------------------------------------
 
@@ -503,6 +496,7 @@ def training_loop(
     # Load training set.
     training_set = dataset.load_dataset(data_dir=dnnlib.convert_path(data_dir), verbose=True, **dataset_args)
     grid_size, grid_reals, grid_labels = misc.setup_snapshot_image_grid(training_set, **grid_args)
+    grid_reals, grid_labels = process_reals(grid_reals, grid_labels, 0.0, mirror_augment, training_set.dynamic_range, drange_net)            
     misc.save_image_grid(grid_reals, dnnlib.make_run_dir_path('reals.png'), drange=training_set.dynamic_range, grid_size=grid_size)
 
     # Construct or load networks.
@@ -577,8 +571,8 @@ def training_loop(
             if 'lod' in E_gpu.vars: lod_assign_ops += [tf.assign(E_gpu.vars['lod'], lod_in)]
             with tf.control_dependencies(lod_assign_ops):
                 with tf.name_scope('E_loss'):
-                    #E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **E_loss_args)
-                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, D=D, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, **E_loss_args)
+                    E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, **E_loss_args)
+                    #E_loss, E_reg = dnnlib.util.call_func_by_name(E=E_gpu, G=G, D=D, opt=E_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, **E_loss_args)
 
             # Register gradients.
             if not lazy_regularization:
