@@ -19,15 +19,16 @@ from metrics import metric_base
 from training import dataset
 from training import misc
 
+import random
+
 # Non-saturating logistic loss with path length regularizer from the paper
 # "Analyzing and Improving the Image Quality of StyleGAN", Karras et al. 2019
 
 def E_logistic_ns_pathreg(E, G, D, opt, training_set, minibatch_size, reals, pl_minibatch_shrink=2, pl_decay=0.01, pl_weight=2.0):
     _ = opt
-    labels = training_set.get_random_labels_tf(minibatch_size)
     fake_dlatents_out = E.get_output_for(reals, is_training=True)   
     fake_images_out = G.components.synthesis.get_output_for(fake_dlatents_out, randomize_noise=False)
-    fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
+    fake_scores_out = D.get_output_for(fake_images_out, [[]], is_training=False)
     loss = tf.nn.softplus(-fake_scores_out) # -log(sigmoid(fake_scores_out))
 
     # Path length regularization.
@@ -70,7 +71,7 @@ def E_logistic_ns_pathreg(E, G, D, opt, training_set, minibatch_size, reals, pl_
         reg = pl_penalty * pl_weight
 
     return loss, reg
-
+"""
 #----------------------------------------------------------------------------
 
 def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
@@ -100,16 +101,37 @@ def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
 
     reg = 0.0
             
+    return loss, reg"""
+    
+#----------------------------------------------------------------------------
+
+#----------------------------------------------------------------------------
+
+def E_loss(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+
+    latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
+    labels = training_set.get_random_labels_tf(minibatch_size) 
+    
+    fakes,dlatents_targets=G.get_output_for(latents,labels,return_dlatents=True)
+    if random.random() < 0.1:
+      dlatents_expr = E.get_output_for(reals, is_training=True)
+    else:
+      dlatents_expr = E.get_output_for(fakes, is_training=True)  
+    
+    loss=tf.nn.l2_loss(dlatents_expr - dlatents_targets)
+
+    reg = 0.0
+            
     return loss, reg
 
 #----------------------------------------------------------------------------
 
-def E_loss_reals(E, G, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+def E_loss_reals(E, G, D, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
     _ = opt, training_set
     dlatents_expr = E.get_output_for(reals, is_training=True)   
     images_expr = G.components.synthesis.get_output_for(dlatents_expr, randomize_noise=False)
     
-    reals = (reals + 1) * (255 / 2)
+    """reals = (reals + 1) * (255 / 2)
     proc_images_expr = (images_expr + 1) * (255 / 2)
     sh = proc_images_expr.shape.as_list()
     if sh[2] > 256:
@@ -119,10 +141,12 @@ def E_loss_reals(E, G, opt, training_set, minibatch_size, reals, labels, gamma=1
 
     lpips = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
     dist = lpips.get_output_for(proc_images_expr, reals)
-    loss = tf.reduce_sum(dist)
+    loss = tf.reduce_sum(dist)"""
     
     #loss = tf.norm(images_expr-reals)
     
+    loss = tf.norm(D.get_output_for(images_expr, [[]], is_training=False)-D.get_output_for(reals, [[]], is_training=False))
+
     # Noise regularization graph.
     reg = 0.0
             
