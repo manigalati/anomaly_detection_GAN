@@ -496,8 +496,8 @@ def training_loop(
     # Load training set.
     training_set = dataset.load_dataset(data_dir=dnnlib.convert_path(data_dir), verbose=True, **dataset_args)
     grid_size, grid_reals, grid_labels = misc.setup_snapshot_image_grid(training_set, **grid_args)
-    grid_reals, grid_labels = process_reals(grid_reals, grid_labels, 0.0, mirror_augment, training_set.dynamic_range, drange_net)            
-    misc.save_image_grid(grid_reals, dnnlib.make_run_dir_path('reals.png'), drange=training_set.dynamic_range, grid_size=grid_size)
+    grid_reals=misc.adjust_dynamic_range(grid_reals, training_set.dynamic_range, drange_net)           
+    misc.save_image_grid(grid_reals, dnnlib.make_run_dir_path('reals.png'), drange=drange_net, grid_size=grid_size)
 
     # Construct or load networks.
     with tf.device('/gpu:0'):

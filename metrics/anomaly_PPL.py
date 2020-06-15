@@ -54,9 +54,10 @@ class anomaly_PPL(metric_base.MetricBase):
                 noise_vars = [var for name, var in Gs_clone.components.synthesis.vars.items() if name.startswith('noise')]
 
                 # Generate latents and interpolation t-values around the target.
-                samples = tf.random_normal([self.minibatch_per_gpu] + Gs_clone.components.synthesis.input_shape[1:],mean=self.dlatent,stddev=0.1)
+                samples=tf.random_normal([self.minibatch_per_gpu,1] + Gs.components.synthesis.input_shape[2:],mean=dlatents[:,0,:],stddev=0.1)
+                samples=tf.tile(samples, [1, Gs.components.synthesis.input_shape[1], 1])
                 samples = tf.cast(samples, tf.float32)
-
+                
                 lerp_t = tf.random_uniform([self.minibatch_per_gpu], 0.0, 0.0)
                 
                 dlats=tf.tile(self.dlatent, [4, 1, 1])
@@ -84,8 +85,10 @@ class anomaly_PPL(metric_base.MetricBase):
 
                 # Evaluate perceptual distance.
                 img_e0, img_e1 = images[0::2], images[1::2]
-                distance_measure = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
-                distance_expr.append(distance_measure.get_output_for(img_e0, img_e1) * (1 / self.epsilon**2))
+                #distance_measure = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
+                #distance_expr.append(distance_measure.get_output_for(img_e0, img_e1) * (1 / self.epsilon**2))
+                distance_expr.append(tf.norm(img_e0-img_e1) * (1 / self.epsilon**2))
+
 
         # Sampling loop.
         all_distances = []
