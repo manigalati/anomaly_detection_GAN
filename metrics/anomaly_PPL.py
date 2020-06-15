@@ -54,7 +54,7 @@ class anomaly_PPL(metric_base.MetricBase):
                 noise_vars = [var for name, var in Gs_clone.components.synthesis.vars.items() if name.startswith('noise')]
 
                 # Generate latents and interpolation t-values around the target.
-                samples=tf.random_normal([self.minibatch_per_gpu,1] + Gs.components.synthesis.input_shape[2:],mean=dlatents[:,0,:],stddev=0.1)
+                samples=tf.random_normal([self.minibatch_per_gpu,1] + Gs.components.synthesis.input_shape[2:],mean=self.dlatent[:,0,:],stddev=0.1)
                 samples=tf.tile(samples, [1, Gs.components.synthesis.input_shape[1], 1])
                 samples = tf.cast(samples, tf.float32)
                 
@@ -63,7 +63,7 @@ class anomaly_PPL(metric_base.MetricBase):
                 dlats=tf.tile(self.dlatent, [4, 1, 1])
                 comparison = tflib.lerp(dlats, samples, lerp_t[:, np.newaxis, np.newaxis] + self.epsilon)
                 dlat_e01 = tf.reshape(tf.stack([dlats, comparison], axis=1), [self.minibatch_per_gpu*2] + Gs_clone.components.synthesis.input_shape[1:])
-                
+                print(dlat_e01.shape)
                 # Synthesize images.
                 with tf.control_dependencies([var.initializer for var in noise_vars]): # use same noise inputs for the entire minibatch
                     images = Gs_clone.components.synthesis.get_output_for(dlat_e01, randomize_noise=False, **Gs_kwargs)
@@ -74,7 +74,7 @@ class anomaly_PPL(metric_base.MetricBase):
                     c = int(images.shape[2] // 8)
                     images = images[:, :, c*3 : c*7, c*2 : c*6]
 
-                # Downsample image to 256x256 if it's larger than that. VGG was built for 224x224 images.
+                """# Downsample image to 256x256 if it's larger than that. VGG was built for 224x224 images.
                 factor = images.shape[2] // 256
                 if factor > 1:
                     images = tf.reshape(images, [-1, images.shape[1], images.shape[2] // factor, factor, images.shape[3] // factor, factor])
@@ -84,23 +84,25 @@ class anomaly_PPL(metric_base.MetricBase):
                 images = (images + 1) * (255 / 2)
 
                 # Evaluate perceptual distance.
-                img_e0, img_e1 = images[0::2], images[1::2]
                 #distance_measure = misc.load_pkl('http://d36zk2xti64re0.cloudfront.net/stylegan1/networks/metrics/vgg16_zhang_perceptual.pkl')
                 #distance_expr.append(distance_measure.get_output_for(img_e0, img_e1) * (1 / self.epsilon**2))
-                distance_expr.append(tf.norm(img_e0-img_e1) * (1 / self.epsilon**2))
+                """
 
+                img_e0, img_e1 = images[0::2], images[1::2]
+                for i in range(img_e0.shape[0]):
+                  distance_expr.append(tf.norm(img_e0[i,:,:,:]-img_e1[i,:,:,:]))
 
         # Sampling loop.
         all_distances = []
         for begin in range(0, self.num_samples, minibatch_size):
             self._report_progress(begin, self.num_samples)
             all_distances += tflib.run(distance_expr)
-        all_distances = np.concatenate(all_distances, axis=0)
-
+        print(all_distances)
+        #all_distances = np.concatenate(all_distances, axis=0)
         # Reject outliers.
         lo = np.percentile(all_distances, 1, interpolation='lower')
         hi = np.percentile(all_distances, 99, interpolation='higher')
         filtered_distances = np.extract(np.logical_and(lo <= all_distances, all_distances <= hi), all_distances)
-        self._report_result(np.mean(filtered_distances))
+        self._report_result(np.mean(all_distances))
 
 #----------------------------------------------------------------------------
